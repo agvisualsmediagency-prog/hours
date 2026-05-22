@@ -306,10 +306,56 @@ async function saveActivitiesToDB(){
   }catch(e){console.log('Save acts error:',e);}
 }
 
+// ── UNUSED TIME ──
+const UNUSED_ID='unused';
+function ensureUnusedAct(){
+  if(!ACTS.find(a=>a.id===UNUSED_ID)){
+    ACTS.push({id:UNUSED_ID,name:'Unused / Wasted Time',color:'#ff3b3b',target:0,productive:false,unused:true});
+  }
+}
+function startUnusedIfIdle(){
+  if(!activeId){
+    ensureUnusedAct();
+    activeId=UNUSED_ID;
+    sessionStart=Date.now();
+    if(clockIv)clearInterval(clockIv);
+    clockIv=setInterval(tick,1000);
+    renderActiveBanner();
+    updateCircles();
+  }
+}
+function stopUnusedTimer(){
+  if(activeId===UNUSED_ID){
+    sessions[UNUSED_ID]=(sessions[UNUSED_ID]||0)+(Date.now()-sessionStart)/3600000;
+    saveSessions();
+    activeId=null;sessionStart=null;
+    if(clockIv)clearInterval(clockIv);
+  }
+}
+
 // ── TIMERS ──
 function startTimer(id){
-  if(activeId===id){stopTimer();return;}
-  if(activeId){sessions[activeId]=(sessions[activeId]||0)+(Date.now()-sessionStart)/3600000;saveSessions();}
+  if(id===UNUSED_ID)return;
+  if(activeId===id){
+    // stopping this activity — restart unused
+    sessions[activeId]=(sessions[activeId]||0)+(Date.now()-sessionStart)/3600000;
+    saveSessions();saveDayScore();
+    activeId=null;sessionStart=null;
+    if(clockIv)clearInterval(clockIv);
+    renderAll();
+    startUnusedIfIdle();
+    return;
+  }
+  // stop unused if running
+  if(activeId===UNUSED_ID){
+    sessions[UNUSED_ID]=(sessions[UNUSED_ID]||0)+(Date.now()-sessionStart)/3600000;
+    saveSessions();
+    activeId=null;sessionStart=null;
+    if(clockIv)clearInterval(clockIv);
+  } else if(activeId){
+    sessions[activeId]=(sessions[activeId]||0)+(Date.now()-sessionStart)/3600000;
+    saveSessions();
+  }
   activeId=id;sessionStart=Date.now();
   if(clockIv)clearInterval(clockIv);
   clockIv=setInterval(tick,1000);
@@ -322,6 +368,7 @@ function stopTimer(){
   activeId=null;sessionStart=null;
   if(clockIv)clearInterval(clockIv);
   renderAll();
+  startUnusedIfIdle();
 }
 function tick(){
   if(!activeId||!sessionStart)return;
@@ -339,6 +386,9 @@ function liveUpdate(){
   const st=document.getElementById('stotal');if(st)st.textContent=fh(tot);
   const sr=document.getElementById('sremain');if(sr)sr.textContent=fh(rem);
   const bp=document.getElementById('barpct');if(bp)bp.textContent=Math.min(Math.round(tot/24*100),100)+'% tracked';
+  // update unused clock inline without full re-render
+  const uc=document.getElementById('unused-clock');
+  if(uc)uc.textContent=fh(elapsed(UNUSED_ID));
   renderBar24();
   updateCircles();
   saveDayScore();
@@ -358,10 +408,35 @@ function circSVG(ratio,color){
   return `<svg width="48" height="48" viewBox="0 0 52 52" style="transform:rotate(-90deg)"><circle cx="${cx}" cy="${cy}" r="${R}" fill="none" stroke="${color}22" stroke-width="4"/><circle cx="${cx}" cy="${cy}" r="${R}" fill="none" stroke="${color}" stroke-width="4" stroke-linecap="round" stroke-dasharray="${C.toFixed(1)}" stroke-dashoffset="${off.toFixed(1)}"/></svg>`;
 }
 
+function renderUnusedBanner(){
+  let banner=document.getElementById('unused-banner');
+  const unusedEl=elapsed(UNUSED_ID);
+  const isRunning=activeId===UNUSED_ID;
+  if(!banner){
+    banner=document.createElement('div');
+    banner.id='unused-banner';
+    banner.style.cssText='background:#1a0a0a;border:1.5px solid #ff3b3b55;border-radius:13px;padding:12px 16px;margin-bottom:12px;display:flex;align-items:center;gap:12px;';
+    const actlist=document.getElementById('actlist');
+    if(actlist)actlist.parentNode.insertBefore(banner,actlist);
+  }
+  banner.innerHTML=`
+    <div style="width:10px;height:10px;border-radius:50%;background:#ff3b3b;flex-shrink:0;${isRunning?'animation:blink 1s infinite':'opacity:.4'}"></div>
+    <div style="flex:1">
+      <div style="font-size:11px;font-weight:700;color:#ff3b3b;margin-bottom:1px">UNUSED / WASTED TIME</div>
+      <div style="font-size:18px;font-weight:800;font-family:'DM Mono',monospace;color:#fff" id="unused-clock">${fh(unusedEl)}</div>
+      <div style="font-size:9px;color:#ff3b3b88;font-family:'DM Mono',monospace;margin-top:1px">${isRunning?'RUNNING — START AN ACTIVITY TO STOP WASTING TIME':'PAUSED — ACTIVITY RUNNING'}</div>
+    </div>
+    <div style="text-align:right">
+      <div style="font-size:9px;color:#ff3b3b;font-family:\'DM Mono\',monospace;font-weight:700">${isRunning?'⚠ IDLE':'✓ ACTIVE'}</div>
+    </div>`;
+}
+
 function renderActivities(){
   const list=document.getElementById('actlist');if(!list)return;
   list.innerHTML='';
+  renderUnusedBanner();
   ACTS.forEach(a=>{
+    if(a.id===UNUSED_ID)return; // skip unused from main list
     const el=elapsed(a.id),ratio=Math.min(el/a.target,1),color=sc(ratio),isOn=activeId===a.id;
     const card=document.createElement('div');
     card.className='acard'+(isOn?' on':'');
@@ -540,7 +615,12 @@ function renderAll(){
 }
 
 // ── START ──
-loadFromDB();
+async function init(){
+  await loadFromDB();
+  ensureUnusedAct();
+  startUnusedIfIdle();
+}
+init();
 setInterval(()=>{if(activeId)tick();},1000);
 </script>
 </body>
